@@ -15,12 +15,15 @@ class candFunction():
     
     def __init__(self):
         
-        self.tot_genes = 12 + 2 + 7
+        self.tot_genes = 12 + 2 + 7 + 1
         # 12 wayne damping parameters..., 
         # 2 -> l_d & m, 
         # 7 -> simple polynomial expression for alpha
+        # 1 -> offset
         
         self.genes     = np.zeros(self.tot_genes)
+        
+        self.w_genes = [ 2.25719934e-02,  3.57192439e-02,  1.62856750e+01,  3.18532412e-01, 3.73023816e+02, -1.92326169e-01, -7.01447041e+00, -2.98206510e-01, 1.13259556e+00,  3.26604853e-02,  3.89733328e-02,  9.92579509e-02]
         
         # ignore this next line.... it's here 
         self.gene_ranges = np.array([[-10, 10] for i in range(self.tot_genes)])
@@ -160,7 +163,7 @@ class candFunction():
         #                                                                       ^ guessed
         
         
-        offset = -3.3  # note: I can make this learnable by setting equal to self.genes[x] ...
+        offset = self.genes[21]# -3.3  # note: I can make this learnable by setting equal to self.genes[x] ...
         
         val = self.genes[12]*(par[0]**self.genes[13]) + self.genes[14]*(par[1]**self.genes[15]) + self.genes[16]*(par[0]**self.genes[17])*(par[0]**self.genes[18])
         val += offset
@@ -204,7 +207,7 @@ class geneticAlgorithm():
         self.population = config["population"]
         self.pop_inds = np.array([i for i in range(self.population)])
         self.ranges = config["ranges"]
-        self.do_dynamic_ranges = config["do_dynmaic_ranges"]
+        self.do_dynamic_ranges = config["do_dynamic_ranges"]
         self.init_genes = config["init_genes"]
         self.num_mutations = config["num_mutations"]
         self.tournament_size = config["tournament_size"]
@@ -250,9 +253,11 @@ class geneticAlgorithm():
                 # initialize the given initial_genes
                 self.kids[i].set_genes(self.init_genes)
                 
-                # randomize the genes a little
-                for i in range(self.n_genes//3):
-                    self.kids[i].mutate(0.1)
+                # keep the first 80% of the population unchanged
+                if i > 0.8*self.population:
+                    
+                    for k in range(self.n_genes//3):
+                        self.kids[i].mutate(0.1)
             else:
                 self.kids[i].randomize_genes()
                 
@@ -264,31 +269,37 @@ class geneticAlgorithm():
         
         sub_population = np.random.choice(self.pop_inds, size = self.tournament_size)
         
-        best_fit_sub_ind = np.argmin(self.fitnesses[sub_population])
+        best_fit_sub_ind = np.nanargmin(self.fitnesses[sub_population])
         
         best_fit_ind = sub_population[best_fit_sub_ind]
         
         return best_fit_ind
     
-    def update_ranges(self):
+    def update_ranges(self, gen):
         
         print("Updating ranges...")
         
         updated_ranges = np.zeros((self.n_genes, 2))
-        weights = 1 - self.fitnesses
         
+        where_finite = [i for i in range(self.population) if np.isfinite(self.fitnesses[i])]
+        
+        
+        weights = np.zeros(self.population)
+        
+        weights[where_finite] = np.max(np.log10(self.fitnesses[where_finite])) - np.log10(self.fitnesses[where_finite])
+        weights /= weights.sum()
+        
+       
         for i in range(self.n_genes):
             
             range_max = 0
             
             for j in range(self.population):
                 range_max += (weights[j]*np.abs(self.kids[j].genes[i]))
+                
+            range_window_factor_size = np.exp(-2*(gen/self.generations)**2)
             
-            updated_ranges[i, :] = [range_max*0.5, range_max*1.5]
-        
-        sum_weights = weights.sum()
-        
-        updated_ranges = updated_ranges/sum_weights
+            updated_ranges[i, :] = [range_max*(1 - range_window_factor_size/2), range_max*(1 + range_window_factor_size/2)]
         
         self.ranges = updated_ranges
         
@@ -308,9 +319,9 @@ class geneticAlgorithm():
         
         for gen in range(self.generations):
             if self.do_dynamic_ranges:
-                self.update_ranges()
+                self.update_ranges(gen)
             
-            print(f"g:{gen + 1}. f:{np.log10(np.min(self.fitnesses))}" )
+            print(f"g:{gen + 1}. f:{np.log10(np.nanmin(self.fitnesses))}" )
             for i in range(self.num_mutations):
                 
                 if np.random.rand() > self.p_crossbreed:
@@ -370,7 +381,12 @@ class geneticAlgorithm():
             # after all mutations are complete
             # store the best set of params(s)
         
-        self.best_fit_func = self.kids[np.argmin(self.fitnesses)]
+        print("Evaluating final model fitnesses...\n(This may take some time.)")
+        
+        for i, kid in enumerate(self.kids):
+            self.fitnesses[i] = self.compute_fitness(self.kids[i], mode = "all_data")
+
+        self.best_fit_func = self.kids[np.nanargmin(self.fitnesses)]
         
     def oldest_func_inds(self):
         oldest_inds = [0, 1]
@@ -385,32 +401,45 @@ class geneticAlgorithm():
         return oldest_inds[0], oldest_inds[1]
     
     
-    def compute_fitness(self, func):
+    def compute_fitness(self, func, mode = "batch"):
         
-        batch = np.random.choice(self.data_points, self.batch_size)
+        if mode == "batch":
+            batch = np.random.choice(self.data_points, self.batch_size)
+        elif mode == "all_data":
+            batch = self.data_points
         
         fitness = 0
         
+        val_a = 0
+        val_b = 0
+        val_c = 0
+        val_d = 0
+        
         for dat in batch:
             
-            par = [dat["ombh2"], dat["omch2"], dat["H0"], 0.06, 1, 3]
+            par = [dat["ombh2"], dat["omch2"], dat["H0"], dat["tau"], 1, dat["As"]]
+                 #[ombh2, omch2, H0, tau, n_s, As]
             damping_fit = func.par_to_rescale(par)
             lensing_fit = func.par_to_lensing(par)
             
             cutoff = 500
             
-            a = ((dat["cls_lensed"]/(lensing_fit) - dat["cls_unlensed"])**2)[:cutoff].sum()
-            b = ((dat["cls_lensed"]/(damping_fit*lensing_fit) - 50)**2)[cutoff:].sum() # took out l(l+1)
-            val = a + b
+            a = 0#((dat["cls_lensed"]/(lensing_fit) - dat["cls_unlensed"])**2)[:cutoff].sum()
+            b = ((dat["cls_lensed"]/(dat["cls_unlensed"]*lensing_fit) - 1)**2)[:cutoff].sum()*10e2
+            c = ((dat["cls_lensed"]/lensing_fit/(damping_fit) - 40)**2).sum()/10e4
+            d = 0#np.abs(lensing_fit - dat["cls_lensed"]/dat["cls_unlensed"])[4000:].sum()/10
             
-            #val = ((dat["cls_lensed"]*l_lplusone/(lensing_fit) - dat["cls_unlensed"]*l_lplusone)**2).sum()
-            
-            # val = ((dat["cls_lensed"]/dat["cls_unlensed"] - lensing_fit)**2).sum()
-            
-            fitness += val
+            val_a += a
+            val_b += b
+            val_c += c
+            val_d += d
+        
+        # print(f"b: {np.log10(val_b)}, c: {np.log10(val_c)}, d: {np.log10(val_d)}")
+        
+        fitness += val_a + val_b + val_c + val_d
         
         # Eq. (16)
-        fitness *= 100/len(batch)
+        fitness *= 1/len(batch)
         return fitness
     
     
