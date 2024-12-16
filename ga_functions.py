@@ -297,9 +297,9 @@ class geneticAlgorithm():
             for j in range(self.population):
                 range_max += (weights[j]*np.abs(self.kids[j].genes[i]))
                 
-            range_window_factor_size = np.exp(-2*(gen/self.generations)**2)
+            range_window_factor_size = np.exp(-2*(gen/self.generations)**4)
             
-            updated_ranges[i, :] = [range_max*(1 - range_window_factor_size/2), range_max*(1 + range_window_factor_size/2)]
+            updated_ranges[i, :] = [range_max*(1 - 9*range_window_factor_size/10), range_max*(1 + 9*range_window_factor_size/10)]
         
         self.ranges = updated_ranges
         
@@ -384,6 +384,7 @@ class geneticAlgorithm():
         print("Evaluating final model fitnesses...\n(This may take some time.)")
         
         for i, kid in enumerate(self.kids):
+            print(f"{i}/{self.population}")
             self.fitnesses[i] = self.compute_fitness(self.kids[i], mode = "all_data")
 
         self.best_fit_func = self.kids[np.nanargmin(self.fitnesses)]
@@ -426,15 +427,15 @@ class geneticAlgorithm():
             
             a = 0#((dat["cls_lensed"]/(lensing_fit) - dat["cls_unlensed"])**2)[:cutoff].sum()
             b = ((dat["cls_lensed"]/(dat["cls_unlensed"]*lensing_fit) - 1)**2)[:cutoff].sum()*10e2
-            c = ((dat["cls_lensed"]/lensing_fit/(damping_fit) - 40)**2).sum()/10e4
-            d = 0#np.abs(lensing_fit - dat["cls_lensed"]/dat["cls_unlensed"])[4000:].sum()/10
-            
+            c = ((dat["cls_lensed"]/lensing_fit/(damping_fit) - 390)**2).sum()/10e4
+            d = ((dat["cls_lensed"]/lensing_fit/(damping_fit) - 390)**2)[3700:].sum()/(10e4)
+               
             val_a += a
             val_b += b
             val_c += c
             val_d += d
         
-        # print(f"b: {np.log10(val_b)}, c: {np.log10(val_c)}, d: {np.log10(val_d)}")
+        print(f"b: {np.log10(val_b)}, c: {np.log10(val_c)}, d: {np.log10(val_d)}")
         
         fitness += val_a + val_b + val_c + val_d
         
